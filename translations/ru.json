@@ -35,9 +35,6 @@
     "Factory address: known after Bluetooth is turned off and on": {
         "Factory address: known after Bluetooth is turned off and on": "Заводской адрес станет известен после выключения и включения Bluetooth"
     },
-    "For example %1": {
-        "For example %1": "Например, %1"
-    },
     "Give the Bluetooth adapter an address of your own, for example so Windows and Linux on one machine stop overwriting each other's pairings. Devices know the computer by its address, so pair them again after changing it.": {
         "Give the Bluetooth adapter an address of your own, for example so Windows and Linux on one machine stop overwriting each other's pairings. Devices know the computer by its address, so pair them again after changing it.": "Задайте Bluetooth-адаптеру свой адрес, например чтобы Windows и Linux на одном компьютере перестали затирать друг другу сопряжения. Устройства узнают компьютер по адресу, поэтому после смены их нужно сопрячь заново."
     },

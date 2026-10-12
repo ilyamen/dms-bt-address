@@ -90,13 +90,3 @@ function isValid(address) {
     const normalized = normalize(address);
     return ADDRESS_RE.test(normalized) && normalized !== "00:00:00:00:00:00" && normalized !== "FF:FF:FF:FF:FF:FF";
 }
-
-// The factory address with the locally administered bit set: stays tied to the
-// adapter and can't clash with any vendor-assigned address.
-function suggest(factory) {
-    const hex = n => n.toString(16).toUpperCase().padStart(2, "0");
-    const first = parseInt(factory.slice(0, 2), 16);
-    if (!(first & 0x02))
-        return hex(first | 0x02) + factory.slice(2);
-    return factory.slice(0, 15) + hex(parseInt(factory.slice(15), 16) ^ 0x01);
-}

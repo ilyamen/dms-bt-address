@@ -33,7 +33,7 @@ import subprocess
 import sys
 import time
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 
 CONFIG = "/etc/dms-bt-addr.conf"
 STATE = "/run/dms-bt-addr/state.json"
@@ -313,9 +313,11 @@ class Daemon:
             self.fail(device, f"the address was lost {MAX_ATTEMPTS} times in {ATTEMPT_WINDOW} s")
             return
         log(f"hci{index}: {current} -> {target}")
-        if target != self.factory.get(device) and target not in self.assigned.setdefault(device, []):
-            self.assigned[device].append(target)
-            self.save_known()
+        if target != self.factory.get(device):
+            assigned = [a for a in self.assigned.get(device, []) if a != target] + [target]
+            if assigned != self.assigned.get(device):
+                self.assigned[device] = assigned
+                self.save_known()
         try:
             self.apply(index, current, target)
             info = self.mgmt.info(index)
@@ -429,7 +431,9 @@ def service_state():
 
 def status():
     config = read_config()
-    factory = read_json(KNOWN).get("factory", {})
+    known = read_json(KNOWN)
+    factory = known.get("factory", {})
+    assigned = known.get("assigned", {})
     service = service_state()
     failed = service["failed"] if service else {}
     controllers = []
@@ -445,6 +449,7 @@ def status():
                 continue
             target = config.get(info["device"])
             info["target"] = target
+            info["lastAddress"] = (assigned.get(info["device"]) or [None])[-1]
             # Without the service's record, an unmanaged controller most
             # likely still has the address it came with
             info["factory"] = factory.get(info["device"]) or (info["address"] if target is None else None)

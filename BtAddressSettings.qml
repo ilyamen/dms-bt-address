@@ -196,10 +196,10 @@ PluginSettings {
                         id: addressField
 
                         width: parent.width - applyButton.width - (resetButton.visible ? resetButton.width + parent.spacing : 0) - parent.spacing
-                        // Left empty for an unmanaged adapter: a prefilled address
-                        // that differs in one digit is too easy to apply by accident
-                        text: card.modelData.target ?? ""
-                        placeholderText: I18n.trFor("btAddress", "For example %1").arg(Core.suggest(card.modelData.factory ?? card.modelData.address))
+                        // The address in use, or the last one used, or the factory one:
+                        // something to edit rather than type from scratch
+                        text: card.modelData.target ?? card.modelData.lastAddress ?? card.modelData.factory ?? card.modelData.address
+                        placeholderText: "XX:XX:XX:XX:XX:XX"
                         maximumLength: 17
                         onAccepted: if (applyButton.enabled) applyButton.clicked()
                     }
@@ -208,7 +208,7 @@ PluginSettings {
                         id: applyButton
 
                         anchors.verticalCenter: parent.verticalCenter
-                        enabled: root.ready && !root.busy && Core.isValid(addressField.text) && (Core.normalize(addressField.text) !== card.modelData.target || card.modelData.state === "failed")
+                        enabled: root.ready && !root.busy && Core.isValid(addressField.text) && (Core.normalize(addressField.text) !== (card.modelData.target ?? card.modelData.address) || card.modelData.state === "failed")
                         text: I18n.trFor("btAddress", "Apply")
                         onClicked: Core.setAddress(card.modelData.device, Core.normalize(addressField.text))
                     }

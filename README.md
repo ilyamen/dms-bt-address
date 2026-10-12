@@ -39,7 +39,7 @@ dms plugins install btAddress
 git clone https://github.com/ilyamen/dms-bt-address ~/.config/DankMaterialShell/plugins/btAddress
 ```
 
-Enable the plugin in Settings → Plugins and open its settings. Press **Install service**, then enter an address for the adapter and press **Apply**. The field suggests the factory address with the locally administered bit set: it stays unique to your adapter and can't clash with any vendor address.
+Enable the plugin in Settings → Plugins and open its settings. Press **Install service**, then edit the address in the field and press **Apply**. The field starts with the address in use, or the last one you set. Changing a single digit is enough to tell the two systems apart. To make sure the address can't clash with any vendor-assigned one, set the locally administered bit by turning the first byte from `44` to `46`, for example.
 
 After changing the address, pair your devices again: they know the computer by its old address.
 
@@ -49,12 +49,12 @@ The service and the settings page both use one script, which works on its own to
 
 ```sh
 /usr/local/libexec/dms-bt-addr status                                   # JSON, no root needed
-sudo /usr/local/libexec/dms-bt-addr set 44:FA:66:66:30:D6 46:FA:66:66:30:D6
-sudo /usr/local/libexec/dms-bt-addr reset 44:FA:66:66:30:D6
+sudo /usr/local/libexec/dms-bt-addr set pci0000:80/0000:80:14.0/usb3/3-14/3-14:1.0 46:FA:66:66:30:D6
+sudo /usr/local/libexec/dms-bt-addr reset pci0000:80/0000:80:14.0/usb3/3-14/3-14:1.0
 journalctl -u dms-bt-addr                                               # what the service did
 ```
 
-The configuration is `/etc/dms-bt-addr.conf`, one `FACTORY = ADDRESS` line per adapter.
+Adapters are identified by their device under `/sys/devices` (`status` lists them), not by address, since the address is what changes. The configuration is `/etc/dms-bt-addr.conf`, one `DEVICE = ADDRESS` line per adapter. The factory address and the addresses set before are kept in `/var/lib/dms-bt-addr/known.json`.
 
 For packaging, `system/install.sh` honours `PREFIX` (default `/usr/local`).
 
