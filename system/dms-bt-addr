@@ -1,0 +1,464 @@
+#!/usr/bin/python3 -I
+"""Keep a custom public address on Bluetooth controllers.
+
+Some controllers (MediaTek MT79xx among them) reload their firmware on every
+power-on and come back with the factory address, while the kernel programs an
+address set with MGMT Set Public Address only once, right after it is set. The
+daemon listens on the mgmt control channel and, whenever a managed controller
+is powered with its factory address, has the kernel program ours again.
+
+    dms-bt-addr daemon                  run the service (root)
+    dms-bt-addr status                  controllers and their state as JSON
+    dms-bt-addr set FACTORY ADDRESS     use ADDRESS instead of FACTORY (root)
+    dms-bt-addr reset FACTORY           go back to FACTORY (root)
+"""
+
+import ctypes
+import fcntl
+import json
+import os
+import re
+import select
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+VERSION = "1.0.0"
+
+CONFIG = "/etc/dms-bt-addr.conf"
+STATE = "/run/dms-bt-addr/state.json"
+SERVICE = "dms-bt-addr.service"
+INSTALL_PATHS = ["/usr/local/libexec/dms-bt-addr", "/usr/libexec/dms-bt-addr"]
+
+HCI_DEV_NONE = 0xFFFF
+HCI_CHANNEL_CONTROL = 3
+HCIDEVDOWN = 0x400448CA  # _IOW('H', 202, int)
+
+OP_READ_INDEX_LIST = 0x0003
+OP_READ_INFO = 0x0004
+OP_SET_POWERED = 0x0005
+OP_READ_CONFIG_INFO = 0x0037
+OP_SET_PUBLIC_ADDRESS = 0x0039
+
+EV_CMD_COMPLETE = 0x0001
+EV_CMD_STATUS = 0x0002
+EV_INDEX_ADDED = 0x0004
+EV_INDEX_REMOVED = 0x0005
+EV_NEW_SETTINGS = 0x0006
+
+SETTING_POWERED = 1 << 0
+OPTION_PUBLIC_ADDRESS = 1 << 1
+
+# Bluetooth SIG company identifiers of common controller vendors
+MANUFACTURERS = {
+    2: "Intel",
+    10: "Qualcomm",
+    13: "Texas Instruments",
+    15: "Broadcom",
+    29: "Qualcomm",
+    70: "MediaTek",
+    93: "Realtek",
+    305: "Cypress",
+}
+
+# A controller that keeps losing the address is left alone rather than being
+# power-cycled forever: after this many failed attempts in a row, or this many
+# attempts within the window, it is marked failed until the config changes.
+MAX_FAILURES = 3
+MAX_ATTEMPTS = 10
+ATTEMPT_WINDOW = 60
+
+ADDRESS_RE = re.compile(r"^[0-9A-F]{2}(:[0-9A-F]{2}){5}$")
+
+
+def log(message):
+    print(message, file=sys.stderr)
+
+
+def normalize(address):
+    address = address.strip().upper().replace("-", ":")
+    if not ADDRESS_RE.match(address) or address in ("00:00:00:00:00:00", "FF:FF:FF:FF:FF:FF"):
+        raise ValueError(f"not a valid Bluetooth address: {address}")
+    return address
+
+
+def unpack_address(data):
+    return ":".join(f"{b:02X}" for b in reversed(data[:6]))
+
+
+def pack_address(address):
+    return bytes(int(part, 16) for part in reversed(address.split(":")))
+
+
+class MgmtError(Exception):
+    def __init__(self, op, status):
+        super().__init__(f"mgmt command {op:#06x} failed with status {status:#04x}")
+        self.status = status
+
+
+class Mgmt:
+    """The kernel's Bluetooth management interface (doc/mgmt-api.txt in BlueZ).
+
+    Sockets opened without CAP_NET_ADMIN are untrusted and can only read, which
+    is all `status` needs.
+    """
+
+    def __init__(self):
+        self.sock = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW | socket.SOCK_CLOEXEC, socket.BTPROTO_HCI)
+        # socket.bind() cannot pick an HCI channel, so bind through libc
+        addr = struct.pack("<HHH", socket.AF_BLUETOOTH, HCI_DEV_NONE, HCI_CHANNEL_CONTROL)
+        libc = ctypes.CDLL(None, use_errno=True)
+        if libc.bind(self.sock.fileno(), addr, len(addr)) != 0:
+            err = ctypes.get_errno()
+            raise OSError(err, os.strerror(err))
+        # Events that arrived while waiting for something else, for the main loop
+        self.events = []
+
+    def fileno(self):
+        return self.sock.fileno()
+
+    def receive(self, timeout):
+        if not select.select([self.sock], [], [], timeout)[0]:
+            return None
+        data = self.sock.recv(65536)
+        code, index, length = struct.unpack_from("<HHH", data)
+        return code, index, data[6:6 + length]
+
+    def command(self, op, index, params=b"", timeout=5):
+        self.sock.send(struct.pack("<HHH", op, index, len(params)) + params)
+        deadline = time.monotonic() + timeout
+        while True:
+            event = self.receive(max(0, deadline - time.monotonic()))
+            if event is None:
+                raise TimeoutError(f"mgmt command {op:#06x} timed out")
+            code, event_index, params_ = event
+            if code in (EV_CMD_COMPLETE, EV_CMD_STATUS) and event_index == index and struct.unpack_from("<H", params_)[0] == op:
+                if params_[2]:
+                    raise MgmtError(op, params_[2])
+                return params_[3:]
+            self.events.append(event)
+
+    def wait_for(self, code, index, timeout):
+        deadline = time.monotonic() + timeout
+        while True:
+            event = self.receive(max(0, deadline - time.monotonic()))
+            if event is None:
+                return False
+            if event[0] == code and event[1] == index:
+                return True
+            self.events.append(event)
+
+    def indexes(self):
+        reply = self.command(OP_READ_INDEX_LIST, HCI_DEV_NONE)
+        count = struct.unpack_from("<H", reply)[0]
+        return list(struct.unpack_from(f"<{count}H", reply, 2))
+
+    def info(self, index):
+        reply = self.command(OP_READ_INFO, index)
+        _version, manufacturer, _supported, current = struct.unpack_from("<BHII", reply, 6)
+        name = reply[20:269].split(b"\0", 1)[0].decode(errors="replace")
+        return {
+            "index": index,
+            "address": unpack_address(reply),
+            "name": name,
+            "manufacturer": MANUFACTURERS.get(manufacturer, f"#{manufacturer}"),
+            "powered": bool(current & SETTING_POWERED),
+        }
+
+    def can_set_address(self, index):
+        reply = self.command(OP_READ_CONFIG_INFO, index)
+        _manufacturer, supported, _missing = struct.unpack_from("<HII", reply)
+        return bool(supported & OPTION_PUBLIC_ADDRESS)
+
+
+def read_config():
+    """FACTORY = ADDRESS lines, one per controller."""
+    config = {}
+    try:
+        with open(CONFIG) as f:
+            for number, line in enumerate(f, 1):
+                line = line.split("#", 1)[0].strip()
+                if not line:
+                    continue
+                try:
+                    factory, address = (normalize(part) for part in line.split("="))
+                except ValueError as e:
+                    log(f"{CONFIG}:{number}: ignored: {e}")
+                    continue
+                config[factory] = address
+    except FileNotFoundError:
+        pass
+    return config
+
+
+def write_config(config):
+    lines = ["# Managed by dms-bt-addr: factory address = address to use instead\n"]
+    lines += [f"{factory} = {address}\n" for factory, address in sorted(config.items())]
+    tmp = CONFIG + ".tmp"
+    with open(tmp, "w") as f:
+        f.writelines(lines)
+    os.chmod(tmp, 0o644)
+    os.replace(tmp, CONFIG)
+
+
+def write_state(state):
+    tmp = STATE + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(state, f)
+    os.replace(tmp, STATE)
+
+
+class Daemon:
+    def __init__(self):
+        self.mgmt = Mgmt()
+        self.config = {}
+        # Old address -> factory one, for entries removed from the config
+        self.restore = {}
+        # Last address handed to the kernel per controller, since it ignores
+        # an address equal to the one it already has
+        self.programmed = {}
+        self.attempts = {}
+        self.failures = {}
+        self.failed = {}
+        self.hangup = False
+        self.stop = False
+
+    def reload(self):
+        config = read_config()
+        for factory, address in self.config.items():
+            if config.get(factory) != address and address != factory:
+                self.restore[address] = factory
+        for address in config.values():
+            self.restore.pop(address, None)
+        self.config = config
+        self.attempts.clear()
+        self.failures.clear()
+        self.failed.clear()
+        self.save_state()
+        log(f"config: {config or 'no controllers'}")
+        for index in self.mgmt.indexes():
+            self.evaluate(index)
+
+    def save_state(self):
+        write_state({"version": VERSION, "pid": os.getpid(), "failed": self.failed})
+
+    def evaluate(self, index):
+        try:
+            info = self.mgmt.info(index)
+        except (OSError, MgmtError):
+            return  # the controller went away
+        current = info["address"]
+        if current in self.config:
+            factory, target = current, self.config[current]
+        elif current in self.restore:
+            factory = target = self.restore[current]
+        else:
+            return
+        # Only a powered controller keeps the address: an unpowered one gets
+        # its firmware, and with it the factory address, reloaded on power-on
+        if not info["powered"] or current == target or factory in self.failed:
+            return
+        now = time.monotonic()
+        recent = [t for t in self.attempts.get(factory, []) if now - t < ATTEMPT_WINDOW] + [now]
+        self.attempts[factory] = recent
+        if len(recent) > MAX_ATTEMPTS:
+            self.fail(factory, f"the address was lost {MAX_ATTEMPTS} times in {ATTEMPT_WINDOW} s")
+            return
+        log(f"hci{index}: {current} -> {target}")
+        try:
+            self.apply(index, factory, target)
+            info = self.mgmt.info(index)
+            if info["address"] != target:
+                raise RuntimeError(f"the controller still reports {info['address']}")
+        except (OSError, MgmtError, RuntimeError) as e:
+            log(f"hci{index}: {e}")
+            self.failures[factory] = self.failures.get(factory, 0) + 1
+            if self.failures[factory] >= MAX_FAILURES:
+                self.fail(factory, str(e))
+            self.power_on(index)
+            return
+        self.failures.pop(factory, None)
+        if target == factory:
+            del self.restore[current]
+        log(f"hci{index}: now {target}")
+
+    def apply(self, index, factory, target):
+        if self.programmed.get(index) == target:
+            self.program(index, factory)
+        if not self.program(index, target):
+            # The kernel already had this address from before we started
+            self.program(index, factory)
+            self.program(index, target)
+        self.power_on(index)
+
+    def program(self, index, address):
+        """Have the kernel write the address to the controller; False if it
+        already had it and did nothing."""
+        # A controller left up in auto-off mode counts as unpowered for mgmt,
+        # so Set Public Address is accepted, but the kernel then fails to
+        # reopen it and the controller never comes back. Close it for real.
+        with socket.socket(socket.AF_BLUETOOTH, socket.SOCK_RAW | socket.SOCK_CLOEXEC, socket.BTPROTO_HCI) as raw:
+            fcntl.ioctl(raw.fileno(), HCIDEVDOWN, index)
+        self.mgmt.command(OP_SET_PUBLIC_ADDRESS, index, pack_address(address))
+        self.programmed[index] = address
+        # Programming takes the controller away and brings it back up in
+        # auto-off mode, briefly enough for power_on() to keep it up as is
+        if not self.mgmt.wait_for(EV_INDEX_REMOVED, index, 1.5):
+            return False
+        if not self.mgmt.wait_for(EV_INDEX_ADDED, index, 15):
+            raise RuntimeError("the controller did not come back after programming the address")
+        return True
+
+    def power_on(self, index):
+        try:
+            self.mgmt.command(OP_SET_POWERED, index, b"\x01", timeout=10)
+        except (OSError, MgmtError) as e:
+            log(f"hci{index}: power on: {e}")
+
+    def fail(self, factory, reason):
+        log(f"{factory}: giving up until the config changes: {reason}")
+        self.failed[factory] = reason
+        self.save_state()
+
+    def handle(self, event):
+        code, index, _params = event
+        if code == EV_INDEX_REMOVED:
+            self.programmed.pop(index, None)
+        elif code in (EV_INDEX_ADDED, EV_NEW_SETTINGS):
+            self.evaluate(index)
+
+    def run(self):
+        wake_r, wake_w = os.pipe2(os.O_NONBLOCK | os.O_CLOEXEC)
+        signal.set_wakeup_fd(wake_w)
+        signal.signal(signal.SIGHUP, lambda *_: setattr(self, "hangup", True))
+        signal.signal(signal.SIGTERM, lambda *_: setattr(self, "stop", True))
+        signal.signal(signal.SIGINT, lambda *_: setattr(self, "stop", True))
+        self.reload()
+        while not self.stop:
+            if self.hangup:
+                self.hangup = False
+                self.reload()
+                continue
+            if self.mgmt.events:
+                self.handle(self.mgmt.events.pop(0))
+                continue
+            ready = select.select([self.mgmt, wake_r], [], [])[0]
+            if wake_r in ready:
+                os.read(wake_r, 64)
+            if self.mgmt in ready:
+                event = self.mgmt.receive(0)
+                if event:
+                    self.handle(event)
+
+
+def installed_version():
+    for path in INSTALL_PATHS:
+        try:
+            with open(path) as f:
+                match = re.search(r'^VERSION = "([^"]+)"', f.read(), re.M)
+            return {"path": path, "version": match.group(1) if match else None}
+        except OSError:
+            continue
+    return None
+
+
+def service_state():
+    try:
+        with open(STATE) as f:
+            state = json.load(f)
+        os.kill(state["pid"], 0)
+    except PermissionError:
+        return state  # alive, just not ours to signal
+    except (OSError, ValueError, KeyError):
+        return None
+    return state
+
+
+def status():
+    config = read_config()
+    factories = {address: factory for factory, address in config.items()}
+    service = service_state()
+    failed = service["failed"] if service else {}
+    controllers = []
+    error = None
+    try:
+        mgmt = Mgmt()
+        for index in mgmt.indexes():
+            try:
+                info = mgmt.info(index)
+                info["canSetAddress"] = mgmt.can_set_address(index)
+            except MgmtError:
+                continue
+            current = info["address"]
+            if current in config:
+                info["factory"], info["target"] = current, config[current]
+                info["state"] = "pending"
+            elif current in factories:
+                info["factory"], info["target"] = factories[current], current
+                info["state"] = "applied"
+            else:
+                info["factory"], info["target"] = current, None
+                info["state"] = "unmanaged"
+            if info["target"] and info["factory"] in failed:
+                info["state"] = "failed"
+                info["error"] = failed[info["factory"]]
+            controllers.append(info)
+    except OSError as e:
+        error = str(e)
+    json.dump({
+        "version": VERSION,
+        "installed": installed_version(),
+        "running": service is not None,
+        "controllers": controllers,
+        "error": error,
+    }, sys.stdout)
+    print()
+
+
+def reload_service():
+    if subprocess.run(["systemctl", "reload", SERVICE], stderr=subprocess.DEVNULL).returncode != 0:
+        sys.exit(f"saved to {CONFIG}, but {SERVICE} is not running")
+
+
+def main(argv):
+    if len(argv) > 1 and argv[1] in ("daemon", "set", "reset") and os.geteuid() != 0:
+        sys.exit(f"{argv[1]} needs root")
+    if len(argv) == 2 and argv[1] == "daemon":
+        Daemon().run()
+    elif len(argv) == 2 and argv[1] == "status":
+        status()
+    elif len(argv) == 4 and argv[1] == "set":
+        try:
+            factory, address = normalize(argv[2]), normalize(argv[3])
+        except ValueError as e:
+            sys.exit(str(e))
+        config = read_config()
+        config.pop(factory, None)
+        if factory == address:
+            pass
+        elif address in config.values() or address in config:
+            sys.exit(f"{address} is already used by another controller")
+        else:
+            config[factory] = address
+        write_config(config)
+        reload_service()
+    elif len(argv) == 3 and argv[1] == "reset":
+        try:
+            factory = normalize(argv[2])
+        except ValueError as e:
+            sys.exit(str(e))
+        config = read_config()
+        config.pop(factory, None)
+        write_config(config)
+        reload_service()
+    elif len(argv) == 2 and argv[1] == "--version":
+        print(VERSION)
+    else:
+        sys.exit(__doc__.split("\n\n", 2)[2].rstrip())
+
+
+if __name__ == "__main__":
+    main(sys.argv)

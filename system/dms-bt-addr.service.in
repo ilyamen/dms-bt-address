@@ -1,0 +1,20 @@
+[Unit]
+Description=Keep custom Bluetooth controller addresses
+Documentation=https://github.com/ilyamen/dms-bt-address
+
+[Service]
+Type=exec
+ExecStart=@LIBEXECDIR@/dms-bt-addr daemon
+ExecReload=kill -HUP $MAINPID
+Restart=on-failure
+RuntimeDirectory=dms-bt-addr
+RuntimeDirectoryMode=0755
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+RestrictAddressFamilies=AF_BLUETOOTH AF_UNIX
+
+[Install]
+WantedBy=bluetooth.target

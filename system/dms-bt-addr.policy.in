@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>dms-bt-address</vendor>
+  <vendor_url>https://github.com/ilyamen/dms-bt-address</vendor_url>
+  <action id="io.github.ilyamen.dms-bt-addr.configure">
+    <description>Change the Bluetooth controller address</description>
+    <description xml:lang="ru">Изменить адрес Bluetooth-адаптера</description>
+    <message>Authentication is required to change the Bluetooth controller address</message>
+    <message xml:lang="ru">Для изменения адреса Bluetooth-адаптера требуется аутентификация</message>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">@LIBEXECDIR@/dms-bt-addr</annotate>
+  </action>
+</policyconfig>

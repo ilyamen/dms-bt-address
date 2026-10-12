@@ -1,0 +1,80 @@
+{
+    "%1 is applied when Bluetooth is turned on": {
+        "%1 is applied when Bluetooth is turned on": "%1 будет применён при включении Bluetooth"
+    },
+    "%1 keeps its factory address %2: %3": {
+        "%1 keeps its factory address %2: %3": "%1 остался с заводским адресом %2: %3"
+    },
+    "%1 not applied: %2": {
+        "%1 not applied: %2": "%1 не применён: %2"
+    },
+    "A small system service sets the address again whenever the adapter powers on, since many adapters forget it. Installing it asks for your password.": {
+        "A small system service sets the address again whenever the adapter powers on, since many adapters forget it. Installing it asks for your password.": "Небольшая системная служба заново задаёт адрес при каждом включении адаптера, потому что многие адаптеры его забывают. При установке будет запрошен пароль."
+    },
+    "Apply": {
+        "Apply": "Применить"
+    },
+    "Applying %1…": {
+        "Applying %1…": "Применяется %1…"
+    },
+    "Bluetooth address not applied": {
+        "Bluetooth address not applied": "Адрес Bluetooth не применён"
+    },
+    "Can't read the Bluetooth controllers: %1": {
+        "Can't read the Bluetooth controllers: %1": "Не удалось получить список Bluetooth-адаптеров: %1"
+    },
+    "Checking the service…": {
+        "Checking the service…": "Проверка службы…"
+    },
+    "Factory": {
+        "Factory": "Заводской"
+    },
+    "Factory address: %1": {
+        "Factory address: %1": "Заводской адрес: %1"
+    },
+    "Give the Bluetooth adapter an address of your own, for example so Windows and Linux on one machine stop overwriting each other's pairings. Devices know the computer by its address, so pair them again after changing it.": {
+        "Give the Bluetooth adapter an address of your own, for example so Windows and Linux on one machine stop overwriting each other's pairings. Devices know the computer by its address, so pair them again after changing it.": "Задайте Bluetooth-адаптеру свой адрес, например чтобы Windows и Linux на одном компьютере перестали затирать друг другу сопряжения. Устройства узнают компьютер по адресу, поэтому после смены их нужно сопрячь заново."
+    },
+    "Install service": {
+        "Install service": "Установить службу"
+    },
+    "No Bluetooth adapters found.": {
+        "No Bluetooth adapters found.": "Bluetooth-адаптеры не найдены."
+    },
+    "Remove service": {
+        "Remove service": "Удалить службу"
+    },
+    "Restart service": {
+        "Restart service": "Перезапустить службу"
+    },
+    "Service not installed": {
+        "Service not installed": "Служба не установлена"
+    },
+    "Service not running": {
+        "Service not running": "Служба не запущена"
+    },
+    "Service out of date: %1 installed, %2 available": {
+        "Service out of date: %1 installed, %2 available": "Служба устарела: установлена %1, доступна %2"
+    },
+    "Service running": {
+        "Service running": "Служба работает"
+    },
+    "The address service is a Python script and changing the address needs root through polkit. Install python3 and polkit, then re-enable the plugin.": {
+        "The address service is a Python script and changing the address needs root through polkit. Install python3 and polkit, then re-enable the plugin.": "Служба адреса написана на Python, а для смены адреса нужны права root через polkit. Установите python3 и polkit, затем снова включите плагин."
+    },
+    "The driver of this adapter can't change its address.": {
+        "The driver of this adapter can't change its address.": "Драйвер этого адаптера не умеет менять адрес."
+    },
+    "Update service": {
+        "Update service": "Обновить службу"
+    },
+    "Using %1": {
+        "Using %1": "Используется %1"
+    },
+    "Using the factory address": {
+        "Using the factory address": "Используется заводской адрес"
+    },
+    "python3 and pkexec are required": {
+        "python3 and pkexec are required": "Нужны python3 и pkexec"
+    }
+}

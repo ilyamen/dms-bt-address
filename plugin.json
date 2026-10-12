@@ -1,0 +1,23 @@
+{
+    "id": "btAddress",
+    "name": "Bluetooth Address",
+    "description": "Give the Bluetooth adapter an address of your choice and keep it across power cycles, suspend and firmware reloads, so a dual-boot system stops losing pairings to the other OS",
+    "version": "1.0.0",
+    "license": "MIT",
+    "author": "ilyamen",
+    "type": "daemon",
+    "component": "./BtAddressService.qml",
+    "settings": "./BtAddressSettings.qml",
+    "startupCheck": "./StartupCheck.qml",
+    "icon": "bluetooth",
+    "requires_dms": ">=1.6.0",
+    "dependencies": [
+        "python3",
+        "polkit"
+    ],
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
