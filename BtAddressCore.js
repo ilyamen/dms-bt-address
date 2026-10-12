@@ -66,12 +66,12 @@ function helperPath() {
     return current("status", null)?.installed?.path ?? "";
 }
 
-function setAddress(factory, address) {
-    runPrivileged("btAddress.set", [helperPath(), "set", factory, address]);
+function setAddress(device, address) {
+    runPrivileged("btAddress.set", [helperPath(), "set", device, address]);
 }
 
-function resetAddress(factory) {
-    runPrivileged("btAddress.reset", [helperPath(), "reset", factory]);
+function resetAddress(device) {
+    runPrivileged("btAddress.reset", [helperPath(), "reset", device]);
 }
 
 function installService() {

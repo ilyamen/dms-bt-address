@@ -36,9 +36,9 @@ PluginComponent {
         for (const controller of status?.controllers ?? []) {
             if (controller.state !== "failed")
                 continue;
-            failures[controller.factory] = true;
-            if (!reportedFailures[controller.factory])
-                ToastService.showError(I18n.trFor("btAddress", "Bluetooth address not applied"), I18n.trFor("btAddress", "%1 keeps its factory address %2: %3").arg(controller.name).arg(controller.factory).arg(controller.error));
+            failures[controller.device] = true;
+            if (!reportedFailures[controller.device])
+                ToastService.showError(I18n.trFor("btAddress", "Bluetooth address not applied"), I18n.trFor("btAddress", "%1 stays on %2: %3").arg(controller.name).arg(controller.address).arg(controller.error));
         }
         reportedFailures = failures;
     }

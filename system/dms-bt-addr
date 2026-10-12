@@ -5,12 +5,19 @@ Some controllers (MediaTek MT79xx among them) reload their firmware on every
 power-on and come back with the factory address, while the kernel programs an
 address set with MGMT Set Public Address only once, right after it is set. The
 daemon listens on the mgmt control channel and, whenever a managed controller
-is powered with its factory address, has the kernel program ours again.
+is powered with another address, has the kernel program ours again.
+
+Controllers are identified by their device in sysfs rather than by address,
+since the address is what changes. The factory address is whatever the
+controller reports when it was not programmed by us; the daemon remembers it
+to go back to.
 
     dms-bt-addr daemon                  run the service (root)
     dms-bt-addr status                  controllers and their state as JSON
-    dms-bt-addr set FACTORY ADDRESS     use ADDRESS instead of FACTORY (root)
-    dms-bt-addr reset FACTORY           go back to FACTORY (root)
+    dms-bt-addr set DEVICE ADDRESS      use ADDRESS on the controller (root)
+    dms-bt-addr reset DEVICE            go back to the factory address (root)
+
+DEVICE is the controller's path under /sys/devices, as `status` reports it.
 """
 
 import ctypes
@@ -26,10 +33,11 @@ import subprocess
 import sys
 import time
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 CONFIG = "/etc/dms-bt-addr.conf"
 STATE = "/run/dms-bt-addr/state.json"
+KNOWN = "/var/lib/dms-bt-addr/known.json"
 SERVICE = "dms-bt-addr.service"
 INSTALL_PATHS = ["/usr/local/libexec/dms-bt-addr", "/usr/libexec/dms-bt-addr"]
 
@@ -174,8 +182,16 @@ class Mgmt:
         return bool(supported & OPTION_PUBLIC_ADDRESS)
 
 
+def device_of(index):
+    """The controller's path under /sys/devices, stable across hciN numbering."""
+    path = os.path.realpath(f"/sys/class/bluetooth/hci{index}/device")
+    if not path.startswith("/sys/devices/"):
+        return None
+    return path[len("/sys/devices/"):]
+
+
 def read_config():
-    """FACTORY = ADDRESS lines, one per controller."""
+    """DEVICE = ADDRESS lines, one per controller."""
     config = {}
     try:
         with open(CONFIG) as f:
@@ -183,39 +199,51 @@ def read_config():
                 line = line.split("#", 1)[0].strip()
                 if not line:
                     continue
+                device, _, address = (part.strip() for part in line.rpartition("="))
                 try:
-                    factory, address = (normalize(part) for part in line.split("="))
+                    if "/" not in device:
+                        raise ValueError(f"not a device path: {device}")
+                    config[device] = normalize(address)
                 except ValueError as e:
                     log(f"{CONFIG}:{number}: ignored: {e}")
-                    continue
-                config[factory] = address
     except FileNotFoundError:
         pass
     return config
 
 
 def write_config(config):
-    lines = ["# Managed by dms-bt-addr: factory address = address to use instead\n"]
-    lines += [f"{factory} = {address}\n" for factory, address in sorted(config.items())]
-    tmp = CONFIG + ".tmp"
+    lines = ["# Managed by dms-bt-addr: controller under /sys/devices = address to use\n"]
+    lines += [f"{device} = {address}\n" for device, address in sorted(config.items())]
+    write_file(CONFIG, "".join(lines))
+
+
+def read_json(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def write_file(path, data):
+    tmp = path + ".tmp"
     with open(tmp, "w") as f:
-        f.writelines(lines)
+        f.write(data)
     os.chmod(tmp, 0o644)
-    os.replace(tmp, CONFIG)
-
-
-def write_state(state):
-    tmp = STATE + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(state, f)
-    os.replace(tmp, STATE)
+    os.replace(tmp, path)
 
 
 class Daemon:
     def __init__(self):
         self.mgmt = Mgmt()
         self.config = {}
-        # Old address -> factory one, for entries removed from the config
+        # Per device: the factory address, and every address we have set,
+        # which can't be mistaken for the factory one later
+        known = read_json(KNOWN)
+        self.factory = known.get("factory", {})
+        self.assigned = known.get("assigned", {})
+        # Address each device had in the config before it was removed from it,
+        # to put the factory address back
         self.restore = {}
         # Last address handed to the kernel per controller, since it ignores
         # an address equal to the one it already has
@@ -228,11 +256,11 @@ class Daemon:
 
     def reload(self):
         config = read_config()
-        for factory, address in self.config.items():
-            if config.get(factory) != address and address != factory:
-                self.restore[address] = factory
-        for address in config.values():
-            self.restore.pop(address, None)
+        for device, address in self.config.items():
+            if config.get(device) != address:
+                self.restore[device] = address
+        for device in config:
+            self.restore.pop(device, None)
         self.config = config
         self.attempts.clear()
         self.failures.clear()
@@ -243,54 +271,76 @@ class Daemon:
             self.evaluate(index)
 
     def save_state(self):
-        write_state({"version": VERSION, "pid": os.getpid(), "failed": self.failed})
+        write_file(STATE, json.dumps({"version": VERSION, "pid": os.getpid(), "failed": self.failed}))
+
+    def save_known(self):
+        write_file(KNOWN, json.dumps({"factory": self.factory, "assigned": self.assigned}))
+
+    def learn(self, device, index, address):
+        """An address the controller reports that we never set comes from its
+        firmware, so it is the factory one."""
+        if self.factory.get(device) == address or address in self.assigned.get(device, []):
+            return
+        if address in (self.config.get(device), self.programmed.get(index)):
+            return
+        log(f"hci{index}: factory address {address}")
+        self.factory[device] = address
+        self.save_known()
 
     def evaluate(self, index):
+        device = device_of(index)
+        if device is None:
+            return
         try:
             info = self.mgmt.info(index)
         except (OSError, MgmtError):
             return  # the controller went away
         current = info["address"]
-        if current in self.config:
-            factory, target = current, self.config[current]
-        elif current in self.restore:
-            factory = target = self.restore[current]
-        else:
-            return
+        self.learn(device, index, current)
+        target = self.config.get(device)
+        if target is None:
+            if self.restore.get(device) != current or device not in self.factory:
+                return
+            target = self.factory[device]
         # Only a powered controller keeps the address: an unpowered one gets
         # its firmware, and with it the factory address, reloaded on power-on
-        if not info["powered"] or current == target or factory in self.failed:
+        if not info["powered"] or current == target or device in self.failed:
             return
         now = time.monotonic()
-        recent = [t for t in self.attempts.get(factory, []) if now - t < ATTEMPT_WINDOW] + [now]
-        self.attempts[factory] = recent
+        recent = [t for t in self.attempts.get(device, []) if now - t < ATTEMPT_WINDOW] + [now]
+        self.attempts[device] = recent
         if len(recent) > MAX_ATTEMPTS:
-            self.fail(factory, f"the address was lost {MAX_ATTEMPTS} times in {ATTEMPT_WINDOW} s")
+            self.fail(device, f"the address was lost {MAX_ATTEMPTS} times in {ATTEMPT_WINDOW} s")
             return
         log(f"hci{index}: {current} -> {target}")
+        if target != self.factory.get(device) and target not in self.assigned.setdefault(device, []):
+            self.assigned[device].append(target)
+            self.save_known()
         try:
-            self.apply(index, factory, target)
+            self.apply(index, current, target)
             info = self.mgmt.info(index)
             if info["address"] != target:
                 raise RuntimeError(f"the controller still reports {info['address']}")
         except (OSError, MgmtError, RuntimeError) as e:
             log(f"hci{index}: {e}")
-            self.failures[factory] = self.failures.get(factory, 0) + 1
-            if self.failures[factory] >= MAX_FAILURES:
-                self.fail(factory, str(e))
+            self.failures[device] = self.failures.get(device, 0) + 1
+            if self.failures[device] >= MAX_FAILURES:
+                self.fail(device, str(e))
             self.power_on(index)
             return
-        self.failures.pop(factory, None)
-        if target == factory:
-            del self.restore[current]
+        self.failures.pop(device, None)
+        if device not in self.config:
+            del self.restore[device]
         log(f"hci{index}: now {target}")
 
-    def apply(self, index, factory, target):
+    def apply(self, index, current, target):
+        # The kernel only programs an address that differs from the last one
+        # it was given, so go through the current one first when needed
         if self.programmed.get(index) == target:
-            self.program(index, factory)
+            self.program(index, current)
         if not self.program(index, target):
             # The kernel already had this address from before we started
-            self.program(index, factory)
+            self.program(index, current)
             self.program(index, target)
         self.power_on(index)
 
@@ -318,9 +368,9 @@ class Daemon:
         except (OSError, MgmtError) as e:
             log(f"hci{index}: power on: {e}")
 
-    def fail(self, factory, reason):
-        log(f"{factory}: giving up until the config changes: {reason}")
-        self.failed[factory] = reason
+    def fail(self, device, reason):
+        log(f"{device}: giving up until the config changes: {reason}")
+        self.failed[device] = reason
         self.save_state()
 
     def handle(self, event):
@@ -379,7 +429,7 @@ def service_state():
 
 def status():
     config = read_config()
-    factories = {address: factory for factory, address in config.items()}
+    factory = read_json(KNOWN).get("factory", {})
     service = service_state()
     failed = service["failed"] if service else {}
     controllers = []
@@ -389,22 +439,24 @@ def status():
         for index in mgmt.indexes():
             try:
                 info = mgmt.info(index)
-                info["canSetAddress"] = mgmt.can_set_address(index)
+                info["device"] = device_of(index)
+                info["canSetAddress"] = info["device"] is not None and mgmt.can_set_address(index)
             except MgmtError:
                 continue
-            current = info["address"]
-            if current in config:
-                info["factory"], info["target"] = current, config[current]
-                info["state"] = "pending"
-            elif current in factories:
-                info["factory"], info["target"] = factories[current], current
+            target = config.get(info["device"])
+            info["target"] = target
+            # Without the service's record, an unmanaged controller most
+            # likely still has the address it came with
+            info["factory"] = factory.get(info["device"]) or (info["address"] if target is None else None)
+            if target is None:
+                info["state"] = "unmanaged"
+            elif info["device"] in failed:
+                info["state"] = "failed"
+                info["error"] = failed[info["device"]]
+            elif info["address"] == target:
                 info["state"] = "applied"
             else:
-                info["factory"], info["target"] = current, None
-                info["state"] = "unmanaged"
-            if info["target"] and info["factory"] in failed:
-                info["state"] = "failed"
-                info["error"] = failed[info["factory"]]
+                info["state"] = "pending"
             controllers.append(info)
     except OSError as e:
         error = str(e)
@@ -431,27 +483,22 @@ def main(argv):
     elif len(argv) == 2 and argv[1] == "status":
         status()
     elif len(argv) == 4 and argv[1] == "set":
+        device = argv[2]
         try:
-            factory, address = normalize(argv[2]), normalize(argv[3])
+            address = normalize(argv[3])
         except ValueError as e:
             sys.exit(str(e))
+        if not os.path.isdir(os.path.join("/sys/devices", device, "bluetooth")):
+            sys.exit(f"no Bluetooth controller at {device}")
         config = read_config()
-        config.pop(factory, None)
-        if factory == address:
-            pass
-        elif address in config.values() or address in config:
+        if any(other != device and used == address for other, used in config.items()):
             sys.exit(f"{address} is already used by another controller")
-        else:
-            config[factory] = address
+        config[device] = address
         write_config(config)
         reload_service()
     elif len(argv) == 3 and argv[1] == "reset":
-        try:
-            factory = normalize(argv[2])
-        except ValueError as e:
-            sys.exit(str(e))
         config = read_config()
-        config.pop(factory, None)
+        config.pop(argv[2], None)
         write_config(config)
         reload_service()
     elif len(argv) == 2 and argv[1] == "--version":

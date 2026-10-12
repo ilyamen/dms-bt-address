@@ -154,7 +154,7 @@ PluginSettings {
                 }
 
                 StyledText {
-                    text: I18n.trFor("btAddress", "Factory address: %1").arg(card.modelData.factory)
+                    text: card.modelData.factory ? I18n.trFor("btAddress", "Factory address: %1").arg(card.modelData.factory) : I18n.trFor("btAddress", "Factory address: known after Bluetooth is turned off and on")
                     font.pixelSize: Theme.fontSizeSmall
                     color: Theme.surfaceVariantText
                 }
@@ -196,8 +196,10 @@ PluginSettings {
                         id: addressField
 
                         width: parent.width - applyButton.width - (resetButton.visible ? resetButton.width + parent.spacing : 0) - parent.spacing
-                        text: card.modelData.target ?? Core.suggest(card.modelData.factory)
-                        placeholderText: "XX:XX:XX:XX:XX:XX"
+                        // Left empty for an unmanaged adapter: a prefilled address
+                        // that differs in one digit is too easy to apply by accident
+                        text: card.modelData.target ?? ""
+                        placeholderText: I18n.trFor("btAddress", "For example %1").arg(Core.suggest(card.modelData.factory ?? card.modelData.address))
                         maximumLength: 17
                         onAccepted: if (applyButton.enabled) applyButton.clicked()
                     }
@@ -208,7 +210,7 @@ PluginSettings {
                         anchors.verticalCenter: parent.verticalCenter
                         enabled: root.ready && !root.busy && Core.isValid(addressField.text) && (Core.normalize(addressField.text) !== card.modelData.target || card.modelData.state === "failed")
                         text: I18n.trFor("btAddress", "Apply")
-                        onClicked: Core.setAddress(card.modelData.factory, Core.normalize(addressField.text))
+                        onClicked: Core.setAddress(card.modelData.device, Core.normalize(addressField.text))
                     }
 
                     DankButton {
@@ -218,7 +220,7 @@ PluginSettings {
                         visible: card.managed
                         enabled: root.ready && !root.busy
                         text: I18n.trFor("btAddress", "Factory")
-                        onClicked: Core.resetAddress(card.modelData.factory)
+                        onClicked: Core.resetAddress(card.modelData.device)
                     }
                 }
             }

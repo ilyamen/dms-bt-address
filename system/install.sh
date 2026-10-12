@@ -24,6 +24,7 @@ uninstall)
     # the next power-on; the others on reboot.
     systemctl disable --now dms-bt-addr.service 2>/dev/null || true
     rm -f "$UNIT" "$POLICY" "$LIBEXECDIR/dms-bt-addr" /etc/dms-bt-addr.conf
+    rm -rf /var/lib/dms-bt-addr
     systemctl daemon-reload
     ;;
 *)
