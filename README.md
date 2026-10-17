@@ -14,6 +14,10 @@ There is no polling: the service sleeps until the kernel reports a change. It ne
 
 The settings page lists every adapter. It shows whether the adapter's driver supports changing the address at all (the kernel reports this per controller), the factory address and the one in use. Changes go through polkit, so DMS asks for your password.
 
+### After suspend
+
+When the controller comes back after suspend or an address change, BlueZ announces it switched off and switches it on in the same instant. Quickshell, which DMS uses for Bluetooth, can miss that second step, so the Control Center shows Bluetooth off while it is on, and the first click turns it off. Two seconds after the adapter appears, the plugin compares the tile with BlueZ and writes the real state back. That corrects the tile without touching the connection.
+
 ## Requirements
 
 - DMS 1.6.0 or newer
