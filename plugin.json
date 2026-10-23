@@ -10,7 +10,7 @@
     "settings": "./BtAddressSettings.qml",
     "startupCheck": "./StartupCheck.qml",
     "icon": "bluetooth",
-    "requires_dms": ">=1.6.0",
+    "requires_dms": ">=2.0.0",
     "dependencies": [
         "python3",
         "polkit"

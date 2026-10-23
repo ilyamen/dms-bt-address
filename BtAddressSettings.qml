@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Common
+import qs.DCommon.Widgets
 import qs.Services
 import qs.Widgets
 import qs.Modules.Plugins
@@ -50,7 +51,7 @@ PluginSettings {
             Row {
                 spacing: Theme.spacingS
 
-                DankIcon {
+                DIcon {
                     anchors.verticalCenter: parent.verticalCenter
                     name: root.ready ? "check_circle" : "warning"
                     size: Theme.iconSize
@@ -85,7 +86,7 @@ PluginSettings {
                 wrapMode: Text.WordWrap
             }
 
-            DankButton {
+            DButton {
                 visible: root.status !== null && !root.ready
                 enabled: !root.busy
                 text: !root.installed ? I18n.trFor("btAddress", "Install service") : !root.upToDate ? I18n.trFor("btAddress", "Update service") : I18n.trFor("btAddress", "Restart service")
@@ -137,7 +138,7 @@ PluginSettings {
                 Row {
                     spacing: Theme.spacingS
 
-                    DankIcon {
+                    DIcon {
                         anchors.verticalCenter: parent.verticalCenter
                         name: card.modelData.powered ? "bluetooth" : "bluetooth_disabled"
                         size: Theme.iconSize
@@ -192,7 +193,7 @@ PluginSettings {
                     spacing: Theme.spacingS
                     visible: card.modelData.canSetAddress
 
-                    DankTextField {
+                    DTextField {
                         id: addressField
 
                         width: parent.width - applyButton.width - (resetButton.visible ? resetButton.width + parent.spacing : 0) - parent.spacing
@@ -204,7 +205,7 @@ PluginSettings {
                         onAccepted: if (applyButton.enabled) applyButton.clicked()
                     }
 
-                    DankButton {
+                    DButton {
                         id: applyButton
 
                         anchors.verticalCenter: parent.verticalCenter
@@ -213,7 +214,7 @@ PluginSettings {
                         onClicked: Core.setAddress(card.modelData.device, Core.normalize(addressField.text))
                     }
 
-                    DankButton {
+                    DButton {
                         id: resetButton
 
                         anchors.verticalCenter: parent.verticalCenter
@@ -236,7 +237,7 @@ PluginSettings {
         wrapMode: Text.WordWrap
     }
 
-    DankButton {
+    DButton {
         visible: root.installed !== null
         enabled: !root.busy
         text: I18n.trFor("btAddress", "Remove service")
